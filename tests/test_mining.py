@@ -802,6 +802,51 @@ def test_a_live_tick_re_extracts_a_session_only_once_it_has_grown_enough(tmp_pat
     assert json.loads(extraction_file.read_text(encoding="utf-8"))["main_message_count"] == 42
 
 
+def test_the_live_bar_scales_with_the_session(tmp_path: Path, monkeypatch):
+    """Eleven active sessions, 7.7 GB of transcripts, each grown by ten
+    messages, were re-read at every live tick (2026-10-11). The bar is also a
+    fraction of what was mined, so a long session is read a bounded number
+    of times; the session-end run (no fraction) still takes any growth."""
+    from windvane.mining import jsonl_reader as jr
+
+    bar = extractors.growth_bar
+    assert bar(0, 10, 0.1) == 10 and bar(50, 10, 0.1) == 10
+    assert bar(160, 10, 0.1) == 16 and bar(25_000, 10, 0.1) == 2_500
+    assert bar(25_000, 1, 0.0) == 1 and bar(25_000) == 1
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    claude_projects = tmp_path / "claude_projects"
+    jdir = claude_projects / path_to_dir_name(str(project))
+    jdir.mkdir(parents=True)
+    monkeypatch.setattr(jr, "_get_claude_projects_dir", lambda: claude_projects)
+    store = tmp_path / "store"
+    (store / "projects" / "p1").mkdir(parents=True)
+    norm = str(project.resolve()).replace("\\", "/")
+    if len(norm) >= 2 and norm[1] == ":":
+        norm = norm[0].lower() + norm[1:]
+    (store / "manifest.json").write_text(json.dumps({"projects": {norm: {"hash": "p1", "name": "proj"}}}), encoding="utf-8")
+
+    sid = _sid()
+    idx = SessionIndex(tmp_path / "index" / "session_index.json")
+    idx.update_session(build_index_for_session(_session(jdir, sid, n=6)))
+    extraction_file = store / "projects" / "p1" / "extractions" / f"{sid}.json"
+    extractors.run_extraction_pipeline(str(project), idx, str(store), min_growth=1, growth_fraction=0.5)
+    assert json.loads(extraction_file.read_text(encoding="utf-8"))["main_message_count"] == 21
+
+    # Six more messages: over the ten-message bar's stand-in (1) but under
+    # half of 21, so the live tick leaves the file; the end run takes them.
+    idx.update_session(build_index_for_session(_session(jdir, sid, n=8)))
+    extractors.run_extraction_pipeline(str(project), idx, str(store), min_growth=1, growth_fraction=0.5)
+    assert json.loads(extraction_file.read_text(encoding="utf-8"))["main_message_count"] == 21
+    extractors.run_extraction_pipeline(str(project), idx, str(store), min_growth=1)
+    assert json.loads(extraction_file.read_text(encoding="utf-8"))["main_message_count"] == 27
+    # 21 more (over half of 27): the live tick re-extracts.
+    idx.update_session(build_index_for_session(_session(jdir, sid, n=15)))
+    extractors.run_extraction_pipeline(str(project), idx, str(store), min_growth=1, growth_fraction=0.5)
+    assert json.loads(extraction_file.read_text(encoding="utf-8"))["main_message_count"] == 48
+
+
 def _workspace(tmp_path: Path):
     ws = tmp_path / "ws"
     a, b = ws / "proj-a", ws / "proj-b"
@@ -1002,3 +1047,35 @@ def test_a_run_on_an_unregistered_project_completes_empty(tmp_path: Path):
     status = json.loads((store / "mining_status.json").read_text(encoding="utf-8"))
     assert status["status"] == "completed" and status["result"]["sessions"] == 0
     assert not bg.is_mining_running()  # the lock went with the run
+
+
+@needs_paths
+@needs_proc_lock
+def test_a_live_tick_restarts_its_interval_when_it_ends(tmp_path: Path, monkeypatch):
+    """The turn-end check reads the marker's age and the spawner wrote it at
+    the tick's start, so a 7-minute tick on a 5-minute interval was followed
+    at once by the next and the miner ran without pause (2026-10-11). The
+    miner writes the marker again when a live tick ends; a session-end run
+    leaves it alone."""
+    from windvane.mining import background as bg
+
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setenv("WINDVANE_DIR", str(store))
+    (store / "manifest.json").write_text(json.dumps({"projects": {}}), encoding="utf-8")
+    marker = store / "live_mine_last"
+
+    bg.run_mining(str(tmp_path / "nowhere"), "post_session", str(store))
+    assert not marker.exists()
+    before = time.time()
+    bg.run_mining(str(tmp_path / "nowhere"), "live", str(store))
+    assert marker.exists() and float(marker.read_text()) >= before - 1
+
+    # Seconds per phase stand beside the peaks, the open phase counted to now.
+    meter = bg.PhaseMeter(interval=10)
+    meter.start("indexing")
+    time.sleep(0.05)
+    meter.start("extracting")
+    assert meter.seconds()["indexing"] >= 0.05 and "extracting" in meter.seconds()
+    meter.stop()
+    assert set(meter.seconds()) == {"indexing", "extracting"}

@@ -47,7 +47,9 @@ def _maybe_live_mine(project_dir: str) -> None:
     phases -- session index, extraction, search embeddings, two code
     indexes -- each of which is cursor/watermark-keyed, so a tick costs the
     new transcript tail, not a re-mine. Tune with the ``live_mine`` setting
-    (seconds, default 300; 0/off disables)."""
+    (seconds, default 300; 0/off disables). The marker is written here when
+    a tick starts and again by the miner when it ends, so the interval runs
+    from the end of one tick to the start of the next."""
     try:
         from windvane import config
 

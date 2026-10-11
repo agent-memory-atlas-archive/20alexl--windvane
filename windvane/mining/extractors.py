@@ -863,20 +863,38 @@ def _live_messages(jsonl_file) -> list[dict]:
     return [m for m in messages if m.get("isSidechain") or not m.get("uuid") or m["uuid"] in live]
 
 
+def growth_bar(stored_main: int, min_growth: int = 1, growth_fraction: float = 0.0) -> int:
+    """How many main messages a mined session must have gained before it is
+    read again: at least ``min_growth``, and at least ``growth_fraction`` of
+    what was mined. A live tick found eleven active sessions grown by ten
+    messages each, a fraction of a percent of their length, and re-read
+    7.7 GB of transcripts every five minutes (2026-10-11). With a tenth, a
+    25,000-message session waits for 2,500 more and a 160-message one for
+    16, so a session is read a bounded number of times over its life."""
+    import math
+
+    bar = max(1, int(min_growth))
+    if growth_fraction > 0 and stored_main > 0:
+        bar = max(bar, math.ceil(stored_main * growth_fraction))
+    return bar
+
+
 def run_extraction_pipeline(
     project_path: str,
     index,  # SessionIndex
     windvane_storage_dir: str = "~/.windvane",
     min_growth: int = 1,
+    growth_fraction: float = 0.0,
 ) -> int:
     """
     Run all extractors on unprocessed sessions.
 
     A session already extracted is read again only once it has grown by at
-    least ``min_growth`` main messages (user and assistant): a live tick
-    every five minutes re-read a 513 MB transcript whole for a handful of
-    new turns (2026-10-09), so the live run asks for more growth than the
-    session-end run does.
+    least ``min_growth`` main messages (user and assistant) and by at least
+    ``growth_fraction`` of the messages mined last time (``growth_bar``): a
+    live tick every five minutes re-read a 513 MB transcript whole for a
+    handful of new turns (2026-10-09), so the live run asks for more growth
+    than the session-end run does.
 
     Returns count of new extractions.
     """
@@ -948,7 +966,9 @@ def run_extraction_pipeline(
                     session_meta.get("assistant_message_count", 0)
                 )
                 stored_main = existing.get("main_message_count")
-                grown = stored_main is not None and expected_main - int(stored_main) >= max(1, int(min_growth))
+                grown = stored_main is not None and expected_main - int(stored_main) >= growth_bar(
+                    int(stored_main), min_growth, growth_fraction
+                )
                 if not grown:
                     # Skip if: has content AND (scorer was available OR still isn't)
                     # Reprocess if: scorer is now available but wasn't during

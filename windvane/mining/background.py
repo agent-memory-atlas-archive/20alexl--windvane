@@ -50,7 +50,29 @@ POST_SESSION_GAP_SECS = 600
 # growth.
 LIVE_MIN_GROWTH = 10
 
+# ...and only once that growth is this fraction of what was mined: under a
+# session with ten subagents, eleven active sessions had each grown by ten
+# messages at every tick, 7.7 GB of transcripts re-read and re-scored every
+# five minutes (2026-10-11). The session-end run takes any growth.
+LIVE_GROWTH_FRACTION = 0.1
+
 _HELD = None  # this process's miner lock, while it runs
+
+
+def _live_marker() -> Path:
+    return _storage() / "live_mine_last"
+
+
+def mark_live_tick() -> None:
+    """Restart the live interval from now. The turn-end check reads the
+    marker's age; the spawner writes it when a tick starts, so a tick longer
+    than the interval was followed by the next at the first turn end after
+    it, and the miner ran back to back (a 7-minute tick on a 5-minute
+    interval, 2026-10-11). The miner writes it again when its tick ends."""
+    try:
+        _live_marker().write_text(str(time.time()))
+    except OSError:
+        pass
 
 
 def is_mining_running() -> bool:
@@ -128,17 +150,34 @@ class PhaseMeter:
         self._interval = interval
         self._phase = ""
         self._peaks: dict[str, int] = {}
+        # Seconds per phase beside the peaks: a 7-minute live tick said
+        # nothing about which phase took the time (2026-10-11).
+        self._secs: dict[str, float] = {}
+        self._since = 0.0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._started = False
 
     def start(self, phase: str) -> None:
         self._sample()
+        self._close()
         self._phase = phase
+        self._since = time.time()
         self._sample()
         if not self._started:
             self._started = True
             self._thread.start()
+
+    def _close(self) -> None:
+        if self._phase:
+            self._secs[self._phase] = round(self._secs.get(self._phase, 0.0) + time.time() - self._since, 1)
+
+    def seconds(self) -> dict[str, float]:
+        """Seconds spent in each phase so far (the open phase counted to now)."""
+        out = dict(self._secs)
+        if self._phase:
+            out[self._phase] = round(out.get(self._phase, 0.0) + time.time() - self._since, 1)
+        return out
 
     def _sample(self) -> None:
         if self._phase:
@@ -152,6 +191,8 @@ class PhaseMeter:
 
     def stop(self) -> dict[str, int]:
         self._sample()
+        self._close()
+        self._phase = ""
         self._stop.set()
         if self._started:
             self._thread.join(timeout=2)
@@ -371,6 +412,7 @@ def run_mining(project_path: str, mode: str, windvane_storage_dir: str):
                 "started": started,
                 "phase": phase,
                 "rss_by_phase": meter._peaks,
+                "seconds_by_phase": meter.seconds(),
                 **extra,
             }
         )
@@ -409,12 +451,14 @@ def run_mining(project_path: str, mode: str, windvane_storage_dir: str):
                 from windvane.mining.extractors import run_extraction_pipeline
 
                 # A live tick re-reads a grown session only once it has
-                # grown by a few turns; the session-end run takes every one.
+                # grown by a few turns and by a tenth of what was mined; the
+                # session-end run takes every one.
                 extraction_count = run_extraction_pipeline(
                     project_path,
                     index,
                     windvane_storage_dir,
                     min_growth=LIVE_MIN_GROWTH if mode == "live" else 1,
+                    growth_fraction=LIVE_GROWTH_FRACTION if mode == "live" else 0.0,
                 )
             except ImportError:
                 pass  # optional dependency missing -- expected, not an error
@@ -570,6 +614,7 @@ def run_mining(project_path: str, mode: str, windvane_storage_dir: str):
                 "extractions": extraction_count,
             },
             "rss_by_phase": meter.stop(),
+            "seconds_by_phase": meter.seconds(),
             "completed": time.time(),
         }
         try:
@@ -590,12 +635,15 @@ def run_mining(project_path: str, mode: str, windvane_storage_dir: str):
             "phase": current_phase,
             "error": str(e),
             "rss_by_phase": meter.stop(),
+            "seconds_by_phase": meter.seconds(),
             "completed": time.time(),
         }
         if phase_errors:
             status["phase_errors"] = phase_errors
         _write_status(status)
     finally:
+        if mode == "live":
+            mark_live_tick()
         _release_lock()
 
 

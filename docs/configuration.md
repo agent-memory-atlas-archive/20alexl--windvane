@@ -56,7 +56,7 @@ To print every setting as resolved for a project: `python -m windvane.config <pr
 | `budget_five_hour_pct` | 90 | pressure | Usage percent of the 5-hour window that nudges |
 | `budget_seven_day_pct` | 95 | pressure | Usage percent of the 7-day window that nudges |
 | `budget_pct` | 90 | pressure | Usage percent of any other rate-limit window that nudges |
-| `live_mine` | 300 | turn end | Seconds between live mining ticks at turn end, 0 disables. Values under 60 are raised to 60. A tick re-reads a session it has already mined only once that session has grown by ten messages; the session-end run takes any growth |
+| `live_mine` | 300 | turn end | Seconds from the end of one live mining tick to the next at turn end, 0 disables. Values under 60 are raised to 60. A tick re-reads a session it has already mined only once that session has grown by ten messages and by a tenth of the messages mined last time, so a long session is read a bounded number of times; the session-end run takes any growth |
 | `non_project_dirs` | empty | paths | Comma-separated directory names that are never a project |
 | `git_trace` | empty | repo state | File that logs every git call, for debugging |
 

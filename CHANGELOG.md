@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.16 (2026-10-11)
+
+- **The live miner's work is bounded.** Under a session with ten subagents, eleven active sessions counted as grown at every live tick, 7.7 GB of transcripts, and each tick re-read and re-scored them all: seven minutes and a gigabyte every five minutes. The interval ran from a tick's start, so a tick longer than the interval was followed at once by the next and the miner ran without pause. A mined session is now re-read only once it has grown by a tenth of what was mined as well as the ten messages, the interval runs from the end of a tick, and the session-end run still takes any growth. `mining_status.json` records the seconds each phase took beside its peak memory.
+- **Troubleshooting: the tools vanishing mid-session.** Claude Code unloads the plugin whose hook was in flight when its shared hooks worker misses a heartbeat on a starved machine; the troubleshooting page says what happened, that the store is intact, and that `/reload-plugins` brings the plugin back.
+
 ## 1.0.15 (2026-10-09)
 
 - **The miner's memory follows the messages, not the file.** A session log keeps every tool result in full, and the live miner read a grown session whole, as dicts: a 513 MB transcript became several gigabytes, and the live tick re-read it every five minutes for a turn or two of growth, so the background miner peaked at 5.4 GB on a box already short of memory. Each record is now slimmed as it is read, to what the extractors use (the chain fields, cut text, a tool call's path or command, a tool result's error flag and the edges of its text, a shell result's stderr); on a 188 MB transcript the read went from 441 MB to 81 MB with the same extractions. A live tick re-reads a mined session only once it has grown by ten messages; the session-end run takes any growth.
