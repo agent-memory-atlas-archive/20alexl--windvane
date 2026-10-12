@@ -68,6 +68,9 @@ declare module 'claude-code' {
       bandHidden: boolean
       lastFile: string | null
       pane: PaneView | null
+      // compact_now asked for the compaction at the turn's end; kept here,
+      // not in a module variable, so a reload before the turn ends keeps it
+      compactPending: boolean
     }
   }
 }

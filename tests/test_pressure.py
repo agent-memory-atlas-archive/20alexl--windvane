@@ -570,6 +570,31 @@ def test_the_measured_auto_compaction_replayed(monkeypatch):
     assert cp.nudge(state, sid)[0] == ""  # once per cycle
 
 
+def test_a_mod_gone_quiet_is_reported_once_per_drop(tmp_path: Path):
+    """Claude Code unloaded the mod mid-session and its tools went with it;
+    the session ran on to 85% of its point and nobody was told (2026-10-12).
+    The marker the mod rewrites every ten seconds going stale is the sign."""
+    store = tmp_path / "store"
+    (store / "sessions").mkdir(parents=True)
+    sid = "cccccccc-0000-4000-8000-00000000000c"
+    state: dict = {}
+    assert cp.mod_gone_note(state, sid) == ""  # never had the mod: headless, nothing to say
+    marker = store / "sessions" / f"{sid}.mod"
+    marker.write_bytes(b'{"plugin": "windvane"}')
+    assert cp.mod_gone_note(state, sid) == ""  # fresh
+    old = time.time() - cp.MOD_STALE_SECS - 60
+    os.utime(marker, (old, old))
+    note = cp.mod_gone_note(state, sid)
+    assert "/reload-plugins" in note and "compact_now" in note and "6 minutes" in note
+    assert cp.mod_gone_note(state, sid) == ""  # once per drop
+    # A reload writes the marker again; a later drop warns again.
+    os.utime(marker, None)
+    assert cp.mod_gone_note(state, sid) == ""
+    older = time.time() - cp.MOD_STALE_SECS - 10
+    os.utime(marker, (older, older))
+    assert "/reload-plugins" in cp.mod_gone_note(state, sid)
+
+
 def test_a_mod_written_mirror_is_read_like_the_statuslines(tmp_path: Path, monkeypatch):
     store = tmp_path / "store"
     (store / "sessions").mkdir(parents=True)

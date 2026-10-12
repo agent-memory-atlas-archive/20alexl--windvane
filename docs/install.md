@@ -12,9 +12,10 @@
 git clone https://github.com/20alexl/windvane.git windvane
 claude plugin marketplace add ./windvane
 claude plugin install windvane@windvane
+claude plugin install windvane-keeper@windvane
 ```
 
-The marketplace is the cloned folder itself, and the plugin in it is named `windvane`.
+The marketplace is the cloned folder itself. It holds two plugins: `windvane`, and `windvane-keeper`, an optional watchdog. Claude Code runs every plugin's hooks module in one worker and unloads the plugin whose hook was running when that worker misses its heartbeat, tools and all, until `/reload-plugins`. The keeper reads the marker windvane's mod rewrites every ten seconds; when it has gone quiet for 45 seconds while windvane is enabled, the keeper changes windvane's hidden `revision` option, which makes Claude Code reload windvane. It reloads at most three times in ten minutes, and never in a session where windvane did not run.
 
 ## Configure
 

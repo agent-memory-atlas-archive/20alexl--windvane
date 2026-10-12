@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.18 (2026-10-12)
+
+- **windvane-keeper: windvane comes back by itself.** Claude Code runs every plugin's hooks module in one worker, and when that worker misses its five-second heartbeat it unloads the plugin whose hook was running, tools and all, until someone types `/reload-plugins`. windvane hooks nearly every event, so on a busy machine it is the one caught; a session with ten agents ran on to 85% of its compaction point with no `compact_now`. The new optional plugin `windvane-keeper` (install it from the same marketplace) watches the marker windvane's mod rewrites every ten seconds and, when it goes quiet while windvane is enabled, changes windvane's hidden `revision` option, which reloads it. Tested against a plugin deliberately unloaded this way: the option change brought it and its tools back. At most three reloads in ten minutes.
+- **A `compact_now` survives a reload.** The request to compact at the turn's end was kept in a module variable, so a reload before the turn ended forgot it. It is kept in the session's state now.
+- **Without the keeper, the session is told.** When the mod has been silent for five minutes while the hooks still run, the next note tells the model to ask for `/reload-plugins`, once per drop.
+
 ## 1.0.17 (2026-10-11)
 
 - **Run reports live in the store.** A session's run report and a goal's manifest went into `<project>/.windvane/runs/`, so every repository a session touched grew an untracked `.windvane` folder. They now go to `projects/<hash>/runs/` in the store, beside the project's checkpoints; `mine(run_report)` and `/windvane-export` read them there. The `run_reports_in_project` setting writes them into the project as before, for anyone who commits them. Reports already in a project stay where they are; move them into the store's `runs/` folder by hand if you want them together.

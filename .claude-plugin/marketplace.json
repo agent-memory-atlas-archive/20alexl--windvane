@@ -8,6 +8,12 @@
       "description": "Babysits a long Claude Code session so you don't have to: watches the context fill, drafts the checkpoint, compacts at the right point and resumes the work. Rules in every subagent, project memory.",
       "source": ".",
       "category": "productivity"
+    },
+    {
+      "name": "windvane-keeper",
+      "description": "Brings windvane back when Claude Code unloads it mid-session, so its tools return without /reload-plugins.",
+      "source": "./keeper",
+      "category": "productivity"
     }
   ]
 }

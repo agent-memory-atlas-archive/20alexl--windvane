@@ -1615,6 +1615,11 @@ def _with_pressure(result: str, project_dir: str) -> str:
         s_text, s_changed = _stall.nudge(state, bearings, project_dir)
         if s_text:
             text = f"{text}\n{s_text}" if text else s_text
+        # The mod gone quiet: Claude Code unloaded it, and its tools with it.
+        g_text = _cp.mod_gone_note(state, _session_id)
+        if g_text:
+            s_changed = True
+            text = f"{g_text}\n{text}" if text else g_text
         # The halt's instructions, once, at the first injection point after
         # it armed (the Stop hook that armed it cannot inject).
         _sst = _stall.stall_state(state)

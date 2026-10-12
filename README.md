@@ -18,7 +18,10 @@ The principle: never ask the model to write what the machine can record.
 git clone https://github.com/20alexl/windvane.git windvane
 claude plugin marketplace add ./windvane
 claude plugin install windvane@windvane
+claude plugin install windvane-keeper@windvane
 ```
+
+windvane-keeper is a small second plugin. When Claude Code unloads windvane mid-session (it does so to the plugin whose hook was running when its shared hooks worker stalls), the keeper reloads it within a minute, so the tools come back without `/reload-plugins`. It is optional.
 
 Python 3.10 or later must be on PATH, or named in the `python` config row or in `WINDVANE_PYTHON`. The engine has no dependencies. Set the config rows with `/plugin configure windvane@windvane`, or pass `--config KEY=VALUE` to the install command. The first interactive session offers to install the optional embedding model for memory and session search. Details are in [docs/install.md](docs/install.md).
 

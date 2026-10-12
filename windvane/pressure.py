@@ -216,6 +216,45 @@ def write_marks(session_id: str, a: dict) -> Optional[Path]:
     return path
 
 
+# The mod rewrites its marker (sessions/<id>.mod) every ten seconds while it
+# is loaded. A marker this long without a rewrite means Claude Code unloaded
+# the mod: it blames a plugin when its shared hooks worker stalls, and the
+# plugin's tools go with it until /reload-plugins, while the command hooks
+# (and so these notes) keep running. A session ran on to 85% of its
+# compaction point with no compact_now and nobody told (2026-10-12). The
+# marker, not the mirror: a statusline takes the mirror over once the mod
+# goes quiet.
+MOD_STALE_SECS = 300
+
+
+def mod_gone_note(state: dict, session_id: str, now: Optional[float] = None) -> str:
+    """The note for a session whose mod went quiet, once per drop (keyed by
+    the marker's last write, so a reload and a later drop warn again); ""
+    otherwise, and "" for a session that never had the mod (headless).
+    Marks the state; the caller saves it."""
+    try:
+        if not session_id:
+            return ""
+        p = mod_marker_path(session_id)
+        if not p.is_file():
+            return ""
+        ts = round(p.stat().st_mtime, 3)
+        age = (time.time() if now is None else now) - ts
+        if ts <= 0 or age < MOD_STALE_SECS or state.get("mod_gone_warned") == ts:
+            return ""
+        state["mod_gone_warned"] = ts
+        mins = max(1, round(age / 60))
+        return (
+            f"windvane's mod has been silent for {mins} minutes: Claude Code unloaded it, so the "
+            "checkpoint, compact_now, memory, log, mine and deps tools are gone and nothing compacts "
+            "before Claude Code's own trigger. These notes and the recorder still run. Tell the person "
+            "in your reply to run /reload-plugins, which brings the tools back (the windvane-keeper "
+            "plugin does that by itself), then carry on."
+        )
+    except Exception:
+        return ""
+
+
 def read_mirror(session_id: str) -> Optional[dict]:
     if not session_id:
         return None

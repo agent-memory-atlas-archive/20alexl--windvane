@@ -1,0 +1,10 @@
+{
+  "name": "windvane-keeper",
+  "version": "1.0.18",
+  "description": "Brings windvane back when Claude Code unloads it mid-session, so its tools return without /reload-plugins.",
+  "author": { "name": "windvane" },
+  "homepage": "https://github.com/20alexl/windvane",
+  "repository": "https://github.com/20alexl/windvane",
+  "license": "MIT",
+  "keywords": ["windvane", "claude-code", "plugin", "watchdog"]
+}

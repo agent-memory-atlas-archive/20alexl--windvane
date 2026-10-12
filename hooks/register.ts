@@ -72,6 +72,12 @@ const pressure = atom({ plugin: 'windvane', key: 'pressure' } as const, null)
 const bandHidden = atom({ plugin: 'windvane', key: 'bandHidden' } as const, false)
 const lastFile = atom({ plugin: 'windvane', key: 'lastFile' } as const, null)
 const paneView = atom({ plugin: 'windvane', key: 'pane' } as const, null)
+// compact_now's request for the compaction at the turn's end. A reload
+// (/reload-plugins, or windvane-keeper bringing windvane back) starts the
+// module's variables over, and a request kept in one was forgotten: the
+// session called compact_now, the reload landed before the turn ended, and
+// nothing compacted (2026-10-09).
+const compactPending = atom({ plugin: 'windvane', key: 'compactPending' } as const, false)
 
 const MIRROR_EVERY_MS = 10_000
 
@@ -565,6 +571,10 @@ export const register: Register = (on, options) => {
     return { text: await remember(hostOf($), settings.python, text, await read($, lastFile)) }
   })
 
+  // The revision row is windvane-keeper's handle, not a setting: a change
+  // to it reloads windvane after Claude Code unloaded it. /config hides it.
+  on('config.describe', { key: 'windvane.revision' }, ($, e, next) => next({ ...e, isHidden: true }))
+
   // /windvane-strict, /windvane-export, /windvane-import: the engine does
   // the work (strict.ts, export.ts, import.ts).
   on('command.run', { command: 'windvane-strict' }, async $ => ({ text: await seedStrict(hostOf($), settings.python) }))
@@ -689,6 +699,7 @@ export const register: Register = (on, options) => {
     const got = await serve(hostOf($), 'compact_now', e, settings)
     if ('deny' in got) return { deny: got.deny }
     noteSave(e, true)
+    if (compactAsked) await update($, compactPending, () => true)
     return { result: got.result }
   })
   on('tool.call', { tool: 'mcp__windvane__memory' }, async ($, e) => {
@@ -829,6 +840,7 @@ export const register: Register = (on, options) => {
     if ((e as unknown as { agentId?: string }).agentId !== undefined) return next(e)
     // A turn ended: the next reading is the rewritten conversation's.
     staleTokens = undefined
+    if (!compactAsked && (await read($, compactPending))) compactAsked = true
     const compacting = compactAsked && !compactRequested
     if (compacting) compactRequested = true
     const done = await next(e)
@@ -853,6 +865,7 @@ export const register: Register = (on, options) => {
         compacted = !('skip' in out && out.skip)
         // Done, or vetoed by a hook: either way this band is answered.
         noteCompacted(compacted ? await fillOf($) : undefined)
+        await update($, compactPending, () => false)
       } catch (err) {
         // Refused (a turn had begun after all) or failed: the save still
         // stands in the band, so the next turn end asks again. Nothing is
@@ -883,7 +896,10 @@ export const register: Register = (on, options) => {
   // was, so the save still counts at the next turn end).
   on('session.compact', async ($, e, next) => {
     const out = await next(e)
-    if (e.trigger !== 'precompute' && !('skip' in out && out.skip)) noteCompacted(await fillOf($))
+    if (e.trigger !== 'precompute' && !('skip' in out && out.skip)) {
+      noteCompacted(await fillOf($))
+      await update($, compactPending, () => false)
+    }
     return out
   })
 }
