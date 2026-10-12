@@ -13,6 +13,7 @@ venv/
 # Working notes a session keeps beside the repo; never part of it
 .learnings/
 session-logs/
+.scratch/
 
 # windvane's own run reports and exports for this repository
 .windvane/
