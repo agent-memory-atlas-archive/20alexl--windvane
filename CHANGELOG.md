@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.17 (2026-10-11)
+
+- **Run reports live in the store.** A session's run report and a goal's manifest went into `<project>/.windvane/runs/`, so every repository a session touched grew an untracked `.windvane` folder. They now go to `projects/<hash>/runs/` in the store, beside the project's checkpoints; `mine(run_report)` and `/windvane-export` read them there. The `run_reports_in_project` setting writes them into the project as before, for anyone who commits them. Reports already in a project stay where they are; move them into the store's `runs/` folder by hand if you want them together.
+
 ## 1.0.16 (2026-10-11)
 
 - **The live miner's work is bounded.** Under a session with ten subagents, eleven active sessions counted as grown at every live tick, 7.7 GB of transcripts, and each tick re-read and re-scored them all: seven minutes and a gigabyte every five minutes. The interval ran from a tick's start, so a tick longer than the interval was followed at once by the next and the miner ran without pause. A mined session is now re-read only once it has grown by a tenth of what was mined as well as the ten messages, the interval runs from the end of a tick, and the session-end run still takes any growth. `mining_status.json` records the seconds each phase took beside its peak memory.

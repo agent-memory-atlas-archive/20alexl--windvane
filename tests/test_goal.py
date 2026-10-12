@@ -323,7 +323,10 @@ def test_a_start_writes_the_manifest(tmp_path: Path):
     ev = ar.observe(state, str(t), str(proj), turn=True)
     assert ev and ev["event"] == "started"
     p = ar.write_start_manifest(str(proj), "s-goal-manifest", ev["auto"])
-    assert p is not None and p.parent == proj / ".windvane" / "runs" and p.name.endswith("-s-goal-m.manifest.json")
+    from windvane.paths import get_project_memory_dir
+
+    assert p is not None and p.parent == get_project_memory_dir(str(proj)) / "runs" and p.name.endswith("-s-goal-m.manifest.json")
+    assert not (proj / ".windvane").exists()
     m = json.loads(p.read_text(encoding="utf-8"))
     assert m["mode"] == "goal" and m["goal"] == "count reaches three" and m["max_turns"] == ar.DEFAULT_TURN_CAP
     assert m["session_id"] == "s-goal-manifest" and m["start_commit"] == "" and isinstance(m["rules"], list)

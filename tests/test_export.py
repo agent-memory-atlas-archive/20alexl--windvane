@@ -46,7 +46,9 @@ def _seed(tmp_path):
         "Port the export", "the runs folder", ["rules.md"], ["runs/"], ["export.py"],
         project_path=str(proj), handoff_summary="export half done", handoff_warnings=["nothing is deleted"],
     )
-    runs = proj / ".windvane" / "runs"
+    from windvane.report import runs_dir
+
+    runs = runs_dir(str(proj))
     runs.mkdir(parents=True)
     (runs / "2026-10-04-abc.md").write_bytes(b"# Run report\n")
     (runs / "2026-10-04-abc.json").write_bytes(b"{}\n")

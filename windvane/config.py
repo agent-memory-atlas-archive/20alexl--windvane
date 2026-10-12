@@ -55,6 +55,7 @@ KNOBS: dict[str, tuple[Any, str, str]] = {
     "budget_pct": (90, "pressure", "usage percent of any other rate-limit window that nudges"),
     # Mining and paths
     "live_mine": (300, "events.stop", "seconds between live mining ticks at turn end; 0 disables"),
+    "run_reports_in_project": (False, "report", "write run reports to <project>/.windvane/runs/ instead of the store"),
     "non_project_dirs": ("", "paths", "comma-separated directory names that are never a project"),
     "git_trace": ("", "repo_state", "file that logs every git call (debugging)"),
 }

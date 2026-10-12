@@ -398,7 +398,7 @@ def _hook_session_end(project_dir: str) -> None:
 
         # The run report: one auditable artifact per substantial session,
         # written into the project the session actually worked in
-        # (<project>/.windvane/runs/). Before mark_session_ended so the
+        # (report.runs_dir: the project's folder in the store). Before mark_session_ended so the
         # state it reads is the live one; the end reason is recorded first.
         try:
             from windvane import report as _rr

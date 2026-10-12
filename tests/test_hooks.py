@@ -780,7 +780,10 @@ def test_the_goal_bracket_end_to_end(tmp_path: Path, monkeypatch):
     assert "block" not in json.dumps(_run("stop_json", stop))
     a = _state(store, sid)["run"]["auto"]
     assert a["status"] == "running" and a["turns"] == 1
-    manifests = list((proj / ".windvane" / "runs").glob("*.manifest.json"))
+    from windvane.report import runs_dir
+
+    manifests = list(runs_dir(str(proj)).glob("*.manifest.json"))
+    assert not (proj / ".windvane").exists()  # the reports live in the store
     assert manifests and '"mode": "goal"' in manifests[0].read_text(encoding="utf-8")
     # No staged directive rides the next injection point any more.
     out = _run("bash_json", {"session_id": sid, "cwd": str(proj), "tool_name": "Bash", "tool_input": {"command": "ls"},
@@ -797,7 +800,7 @@ def test_the_goal_bracket_end_to_end(tmp_path: Path, monkeypatch):
     assert a["status"] == "met" and "printed 3" in a["why"]
     alerts = log.read_text(encoding="utf-8").splitlines()
     assert len([x for x in alerts if "goal met" in x]) == 1, alerts
-    reports = list((proj / ".windvane" / "runs").glob("*.md"))
+    reports = list(runs_dir(str(proj)).glob("*.md"))
     assert reports and "count reaches three" in reports[0].read_text(encoding="utf-8")
     _run("stop_json", stop)
     assert _state(store, sid)["run"]["auto"]["status"] == "met"

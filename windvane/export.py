@@ -145,7 +145,9 @@ def _checkpoints_md(project: str, now: float) -> list:
 
 
 def _run_reports(project: str) -> list:
-    runs = Path(project) / ".windvane" / "runs"
+    from windvane.report import runs_dir
+
+    runs = runs_dir(project)
     if not runs.is_dir():
         return []
     return sorted(p for p in runs.iterdir() if p.is_file() and p.suffix in (".md", ".json"))

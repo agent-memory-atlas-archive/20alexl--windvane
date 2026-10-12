@@ -1370,11 +1370,23 @@ def test_the_report_reads_the_transcript_and_the_hook_state(tmp_path: Path, monk
     assert "489K → 28K" in md and "manual task_1" in md
     assert "by windvane report schema" in md
 
+    # The report goes into the project's folder in the store; the project
+    # itself gets no .windvane folder (it showed as untracked in every repo a
+    # session touched, 2026-10-11).
+    from windvane.paths import get_project_memory_dir
+
     p = rr.write_report(sid, str(project), state)
-    assert p is not None and p.suffix == ".md" and p.parent == project / ".windvane" / "runs"
+    assert p is not None and p.suffix == ".md" and p.parent == get_project_memory_dir(str(project)) / "runs"
+    assert p.parent.parent.parent.parent == Path(os.environ["WINDVANE_DIR"])
+    assert not (project / ".windvane").exists()
     js = p.with_suffix(".json")
     assert js.is_file() and json.loads(js.read_text(encoding="utf-8"))["schema"] == rr.SCHEMA
     assert rr.write_report(sid, str(project), state) == p  # idempotent
+
+    # run_reports_in_project puts them back in the project, for committing.
+    monkeypatch.setenv("WINDVANE_RUN_REPORTS_IN_PROJECT", "true")
+    q = rr.write_report(sid, str(project), state)
+    assert q is not None and q.parent == project / ".windvane" / "runs" and q.with_suffix(".json").is_file()
 
     # A session started from a workspace root lives under THAT projects dir:
     # found by session id, not by project.

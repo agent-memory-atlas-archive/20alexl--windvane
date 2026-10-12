@@ -1,7 +1,9 @@
 """Run report: one auditable artifact per session, from data windvane already has.
 
-Written to ``<project>/.windvane/runs/<date>-<session8>.md`` and ``.json`` at
-SessionEnd (and on demand via ``python -m windvane.report``). Every number
+Written to ``runs/<date>-<session8>.md`` and ``.json`` under the project's
+folder in the store (``runs_dir``; ``<project>/.windvane/runs/`` with
+``run_reports_in_project``) at SessionEnd (and on demand via
+``python -m windvane.report``). Every number
 here is captured by a hook or read from the transcript -- nothing is
 self-reported by the model.
 
@@ -862,7 +864,21 @@ def _goal_summary(state: dict) -> Optional[dict]:
 
 
 def runs_dir(project_dir: str) -> Path:
-    return Path(project_dir) / RUNS_DIR
+    """Where a project's run reports and goal manifests go: ``runs/`` under
+    the project's folder in the store. The reports went into the project
+    itself and showed as an untracked folder in every repository a session
+    touched (2026-10-11); ``run_reports_in_project`` puts them back there
+    for anyone who wants them committed."""
+    try:
+        from windvane import config
+
+        if config.knob("run_reports_in_project", project_dir):
+            return Path(project_dir) / RUNS_DIR
+    except Exception:
+        pass
+    from windvane.paths import get_project_memory_dir
+
+    return get_project_memory_dir(project_dir) / "runs"
 
 
 def write_report(session_id: str, project_dir: str, state: Optional[dict] = None) -> Optional[Path]:

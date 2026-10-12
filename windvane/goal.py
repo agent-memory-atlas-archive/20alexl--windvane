@@ -350,9 +350,12 @@ def _git_head(project_dir: str) -> str:
 
 
 def write_manifest(project_dir: str, session_id: str, data: dict) -> Optional[Path]:
-    """``<project>/.windvane/runs/<date>-<session8>.manifest.json``. None on failure."""
+    """``<date>-<session8>.manifest.json`` beside the run reports
+    (``report.runs_dir``). None on failure."""
     try:
-        d = Path(project_dir) / ".windvane" / "runs"
+        from windvane.report import runs_dir
+
+        d = runs_dir(project_dir)
         d.mkdir(parents=True, exist_ok=True)
         p = d / f"{time.strftime('%Y-%m-%d')}-{session_id[:8]}.manifest.json"
         p.write_bytes((json.dumps(data, indent=2, default=str) + "\n").encode("utf-8"))

@@ -122,6 +122,7 @@ Nine rows are set in the plugin config: `python`, `status_segment`, `result_budg
 | `budget_seven_day_pct` | 95 | Usage percent of the 7-day window that nudges |
 | `budget_pct` | 90 | Usage percent of any other rate-limit window that nudges |
 | `live_mine` | 300 | Seconds from the end of one live mining tick to the next at turn end, 0 disables; a tick re-reads a mined session only once it has grown by ten messages and a tenth of its length |
+| `run_reports_in_project` | false | Write run reports to `<project>/.windvane/runs/` instead of the store |
 | `non_project_dirs` | empty | Comma-separated directory names that are never a project |
 | `git_trace` | empty | File that logs every git call, for debugging |
 
@@ -132,13 +133,13 @@ The four rows not in the table are plugin rows only. They default to: `python` e
 The store is `~/.windvane`, or the folder named by `WINDVANE_DIR`.
 
 - `manifest.json` maps each project path to a hash.
-- `projects/<hash>/` holds one project's memory, its checkpoint ring and the latest handoff.
+- `projects/<hash>/` holds one project's memory, its checkpoint ring, the latest handoff and `runs/`, the run reports.
 - `checkpoints/` is the global ring and the per-task checkpoint files.
 - `sessions/` holds per-session working files, including the context mirror.
 - `config.json` holds your defaults for every project.
 - The daemon's port, process id and lock files sit in the root.
 
-Each project may also hold `.windvane/` with `config.json`, `runs/` (run reports) and `export/` (the output of `/windvane-export`).
+A project gets a `.windvane/` folder only for what you put there: `config.json` (its settings), `export/` (the output of `/windvane-export`), and `runs/` when `run_reports_in_project` is on.
 
 To bring over a claude-engram store, run `/windvane-import`, or `python -m windvane.doctor --import` from the cloned folder. The import copies the memory files, the rings and the session index, leaves out per-session state and the runtime files of a live engram process, and never changes or deletes the source. A destination that already has a store is refused unless you pass `--merge`, which adds only the projects it lacks.
 
