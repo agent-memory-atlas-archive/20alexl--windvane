@@ -847,6 +847,122 @@ def test_the_live_bar_scales_with_the_session(tmp_path: Path, monkeypatch):
     assert json.loads(extraction_file.read_text(encoding="utf-8"))["main_message_count"] == 48
 
 
+def test_a_text_is_embedded_once_and_its_score_is_kept_across_runs(monkeypatch):
+    """The session-end run embedded every candidate of a grown session again,
+    and the decision pass embedded each one twice, once per template set:
+    321 texts and 23 s of CPU encoding for a few new turns (2026-10-18)."""
+    from windvane import daemon
+
+    sent: list = []
+    monkeypatch.setattr(daemon, "embed_batch_via_server", lambda texts: sent.extend(texts) or [_fake_vec(t) for t in texts])
+    monkeypatch.setenv("WINDVANE_GPU_BULK_MIN", "100000")
+    extractors._template_cache.clear()
+    for key, templates in (("corrections", extractors._CORRECTION_TEMPLATES), ("decisions", extractors._DECISION_TEMPLATES),
+                           ("non_decisions", extractors._NON_DECISION_TEMPLATES)):
+        assert extractors._get_template_embeddings(templates, key)
+    sid = _sid()
+    edit = {"name": "Edit", "input": {"file_path": "/project/src/parser.py", "old_string": "a", "new_string": "b"}}
+    msgs = [json.loads(r) for r in (
+        _user("Make the parser accept trailing commas", sid, 0),
+        _assistant("Done: the parser takes trailing commas now.", sid, 1, tool_use=edit),
+        _user("keep the parser strict about everything else", sid, 2),
+        _assistant("Understood, strict otherwise.", sid, 3, tool_use=edit),
+    )]
+    sent.clear()
+    scores: dict = {}
+    extractors.extract_all(msgs, scores)
+    assert sent and len(sent) == len(set(sent))  # each text once, not once per template set
+    assert set(scores) <= extractors._score_sets() and all(scores.values())
+    sent.clear()
+    extractors.extract_all(msgs, scores)
+    assert sent == []  # every text already scored
+    more = msgs + [json.loads(_user("always run the parser tests before a commit", sid, 4))]
+    extractors.extract_all(more, scores)
+    assert sent == ["always run the parser tests before a commit"]
+    extractors._template_cache.clear()
+
+
+def test_a_large_batch_goes_to_the_gpu_worker_and_falls_back_to_the_daemon(monkeypatch):
+    from windvane import daemon
+    from windvane.semantic import worker
+
+    calls: list = []
+    gpu = lambda texts: calls.append(("gpu", len(texts))) or [_fake_vec(t) for t in texts]
+    monkeypatch.setattr(worker, "embed_texts_bulk", gpu)
+    monkeypatch.setattr(daemon, "embed_batch_via_server", lambda texts: calls.append(("daemon", len(texts))) or [_fake_vec(t) for t in texts])
+    monkeypatch.setenv("WINDVANE_GPU_BULK_MIN", "3")
+    extractors._embed_memo.clear()
+    assert len(extractors._batch_embed(["a", "b"])) == 2
+    assert len(extractors._batch_embed(["c", "d", "e", "c"])) == 4  # three new texts: the worker
+    assert calls == [("daemon", 2), ("gpu", 3)]
+    calls.clear()
+    monkeypatch.setattr(worker, "embed_texts_bulk", lambda texts: calls.append(("gpu", len(texts))) or None)  # no GPU
+    assert all(extractors._batch_embed(["f", "g", "h"]))
+    assert calls == [("gpu", 3), ("daemon", 3)]
+    extractors._embed_memo.clear()
+
+
+def test_a_subagent_transcript_is_read_once_until_it_grows(tmp_path: Path, monkeypatch):
+    """The session-end run read every subagent file of a grown session again:
+    481 files and 6.1 GB, 25 s of a 34 s read, all held in memory at once
+    (2026-10-18). A file is extracted on its own and kept with its size."""
+    from windvane.mining import jsonl_reader as jr
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    claude_projects = tmp_path / "claude_projects"
+    jdir = claude_projects / path_to_dir_name(str(project))
+    jdir.mkdir(parents=True)
+    monkeypatch.setattr(jr, "_get_claude_projects_dir", lambda: claude_projects)
+    store = tmp_path / "store"
+    (store / "projects" / "p1").mkdir(parents=True)
+    norm = str(project.resolve()).replace("\\", "/")
+    if len(norm) >= 2 and norm[1] == ":":
+        norm = norm[0].lower() + norm[1:]
+    (store / "manifest.json").write_text(json.dumps({"projects": {norm: {"hash": "p1", "name": "proj"}}}), encoding="utf-8")
+
+    read: list = []
+    real = jr.iter_messages
+    monkeypatch.setattr(jr, "iter_messages", lambda path, *a, **k: (read.append(Path(path).name), real(path, *a, **k))[1])
+
+    sid = _sid()
+    subagents = jdir / sid / "subagents"
+    subagents.mkdir(parents=True)
+
+    def agent(name: str, key: str):
+        lines = [
+            _user(f"Find the {key} bug", sid, 0),
+            _assistant("Running the tests.", sid, 1, tool_use={"name": "Bash", "input": {"command": "pytest -q tests/test_alias.py"}}),
+            _result(f"FAILED tests/test_alias.py::test_a - KeyError: '{key}'\n1 failed, 3 passed", sid, is_error=True, offset_min=2),
+            _assistant(f"Fixed the KeyError by seeding {key}.", sid, 3,
+                       tool_use={"name": "Edit", "input": {"file_path": f"/project/src/{key}.py", "old_string": "a", "new_string": "b"}}),
+        ]
+        (subagents / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    agent("agent-a.jsonl", "alias_a")
+    idx = SessionIndex(tmp_path / "index" / "session_index.json")
+    idx.update_session(build_index_for_session(_session(jdir, sid, n=6)))
+    extraction_file = store / "projects" / "p1" / "extractions" / f"{sid}.json"
+    extractors.run_extraction_pipeline(str(project), idx, str(store), min_growth=1)
+    first = json.loads(extraction_file.read_text(encoding="utf-8"))
+    assert "agent-a.jsonl" in read
+    assert any("alias_a" in m["description"] for m in first["mistakes"])
+    assert first["subagents"]["agent-a.jsonl"]["size"] == (subagents / "agent-a.jsonl").stat().st_size
+    assert "/project/src/alias_a.py" in first["session_files"]
+
+    # The session grows and a second agent runs: only the new file is read,
+    # and the first agent's extractions stay.
+    read.clear()
+    agent("agent-b.jsonl", "alias_b")
+    idx.update_session(build_index_for_session(_session(jdir, sid, n=8)))
+    extractors.run_extraction_pipeline(str(project), idx, str(store), min_growth=1)
+    second = json.loads(extraction_file.read_text(encoding="utf-8"))
+    assert "agent-b.jsonl" in read and "agent-a.jsonl" not in read
+    assert second["main_message_count"] == 27
+    assert {k for k in ("alias_a", "alias_b") if any(k in m["description"] for m in second["mistakes"])} == {"alias_a", "alias_b"}
+    assert second["message_count"] == 27 + first["subagents"]["agent-a.jsonl"]["message_count"] + second["subagents"]["agent-b.jsonl"]["message_count"]
+
+
 def _workspace(tmp_path: Path):
     ws = tmp_path / "ws"
     a, b = ws / "proj-a", ws / "proj-b"

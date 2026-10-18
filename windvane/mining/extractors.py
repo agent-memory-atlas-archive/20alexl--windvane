@@ -177,16 +177,76 @@ def _semantic_score_single(
     return max_sim
 
 
+# The vectors embedded during one extract_all, by text: the decision pass
+# scores the same texts against two template sets and embedded each one
+# twice, and most correction candidates are decision candidates too.
+_embed_memo: dict[str, list[float]] = {}
+# The scores the session's earlier runs computed (extract_all's ``scores``),
+# by template set and then by text. A grown session is extracted again
+# whole, and every candidate was embedded again with it: 321 texts and 23 s
+# of CPU encoding for a long session that had gained a few turns
+# (2026-10-18).
+_score_memo: dict[str, dict[str, float]] = {}
+
+
+def _text_key(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _score_set(template_key: str, templates: list[str]) -> str:
+    """A template set's name in the stored scores: the key, the templates and
+    the embedding space, so an edited template or another model scores
+    afresh instead of reusing a score from a different space."""
+    import hashlib
+
+    try:
+        from windvane.semantic.config import embed_signature
+
+        space = embed_signature()
+    except Exception:
+        space = ""
+    digest = hashlib.sha1("\n".join([space, *templates]).encode("utf-8")).hexdigest()[:12]
+    return f"{template_key}:{digest}"
+
+
+def _score_sets() -> set[str]:
+    return {
+        _score_set("corrections", _CORRECTION_TEMPLATES),
+        _score_set("decisions", _DECISION_TEMPLATES),
+        _score_set("non_decisions", _NON_DECISION_TEMPLATES),
+    }
+
+
 def _batch_embed(texts: list[str]) -> list[list[float]]:
-    """Batch embed texts via the scorer server. Single TCP call."""
+    """Vectors for texts, each text embedded once per extract_all. A batch
+    at the bulk threshold or above goes to the transient GPU worker (the
+    first mine of a long session); the rest, and anything the worker
+    declines, to the daemon in one call."""
     if not texts:
         return []
-    try:
-        from windvane.daemon import embed_batch_via_server
+    todo = [t for t in dict.fromkeys(texts) if t not in _embed_memo]
+    if todo:
+        vectors = None
+        try:
+            from windvane.semantic.worker import bulk_threshold, embed_texts_bulk
 
-        return embed_batch_via_server(texts)
-    except Exception:
-        return [[] for _ in texts]
+            if len(todo) >= bulk_threshold():
+                vectors = embed_texts_bulk(todo)
+        except Exception:
+            vectors = None
+        if vectors is None or len(vectors) != len(todo):
+            try:
+                from windvane.daemon import embed_batch_via_server
+
+                vectors = embed_batch_via_server(todo)
+            except Exception:
+                vectors = [[] for _ in todo]
+        for text, vec in zip(todo, vectors):
+            if vec:
+                _embed_memo[text] = vec
+    return [_embed_memo.get(t, []) for t in texts]
 
 
 def _batch_score(
@@ -197,8 +257,10 @@ def _batch_score(
     """
     Batch score texts against templates using the embedding model.
 
-    Embeds all candidate texts in one pass, then scores against template embeddings.
-    Much faster than individual calls for multiple candidates.
+    A text the session's earlier runs scored keeps its score; the rest are
+    embedded in one pass and scored against the template embeddings. A text
+    the encoder gave no vector scores 0.0 and is not kept, so a run with
+    the scorer back scores it.
     """
     if not texts:
         return []
@@ -207,16 +269,13 @@ def _batch_score(
     if not template_embs:
         return [0.0] * len(texts)
 
-    embeddings = _batch_embed(texts)
-
-    scores = []
-    for emb in embeddings:
+    known = _score_memo.setdefault(_score_set(template_key, templates), {})
+    keys = [_text_key(t) for t in texts]
+    todo = list(dict.fromkeys(t for t, k in zip(texts, keys) if k not in known))
+    for text, emb in zip(todo, _batch_embed(todo)):
         if emb:
-            scores.append(_semantic_score_single(emb, template_embs))
-        else:
-            scores.append(0.0)
-
-    return scores
+            known[_text_key(text)] = round(_semantic_score_single(emb, template_embs), 6)
+    return [known.get(k, 0.0) for k in keys]
 
 
 # ─── Error type extraction (regex — precise, not fuzzy) ──────────────────
@@ -266,7 +325,7 @@ _TEST_FAILURE_PATTERN = re.compile(
 # ─── Structural extractors ──────────────────────────────────────────────
 
 
-def extract_all(messages: list[dict]) -> SessionExtractions:
+def extract_all(messages: list[dict], scores: Optional[dict] = None) -> SessionExtractions:
     """
     Extract all intelligence from a message sequence using structural analysis.
 
@@ -275,7 +334,22 @@ def extract_all(messages: list[dict]) -> SessionExtractions:
     - Error→Fix sequences = mistakes with fixes
     - Repeated file edits = struggle areas
     - Approach changes = tried-and-switched patterns
+
+    ``scores`` holds the semantic scores of earlier runs over the same
+    session (by template set, then by text) and is updated in place with
+    the new ones; the pipeline keeps it in the session's extraction file.
     """
+    global _score_memo
+    _score_memo = scores if scores is not None else {}
+    _embed_memo.clear()
+    try:
+        return _extract_all(messages)
+    finally:
+        _score_memo = {}
+        _embed_memo.clear()
+
+
+def _extract_all(messages: list[dict]) -> SessionExtractions:
     extractions = SessionExtractions(extracted_at=time.time())
 
     # Pre-classify messages into a conversation flow
@@ -985,19 +1059,50 @@ def run_extraction_pipeline(
         if not jsonl_file.exists():
             continue
 
+        # The scores and subagent parts of the last run, kept unless that run
+        # had no scorer and this one has (its parts lack the semantic hits).
+        last = previous or {}
+        reuse = bool(last) and (last.get("scorer_available", False) or not scorer_available)
+        scores = dict(last.get("scores") or {}) if reuse else {}
+        cached_parts = (last.get("subagents") or {}) if reuse else {}
+
         messages = _live_messages(jsonl_file)
         main_message_count = len(messages)
+        extractions = extract_all(messages, scores) if messages else SessionExtractions(extracted_at=time.time())
+        del messages
 
+        # Each subagent transcript is extracted on its own and kept with its
+        # size: a finished agent's file never changes, and the session-end
+        # run read all of them again for every grown session, 481 files and
+        # 6.1 GB, 25 s of a 34 s read, with every message held at once
+        # (2026-10-18). A file that grew (an agent still running) is read
+        # again.
         session_dir = jsonl_dir / session_meta.get("jsonl_file", "").replace(
             ".jsonl", ""
         )
         subagents_dir = session_dir / "subagents"
+        parts: dict[str, dict] = {}
+        message_count = main_message_count
         if subagents_dir.exists():
-            for sub_jsonl in subagents_dir.glob("*.jsonl"):
-                for _, msg in iter_messages(sub_jsonl, types={"user", "assistant"}):
-                    messages.append(slim_message(msg))
+            for sub_jsonl in sorted(subagents_dir.glob("*.jsonl")):
+                try:
+                    size = sub_jsonl.stat().st_size
+                except OSError:
+                    continue
+                part = cached_parts.get(sub_jsonl.name)
+                if not (isinstance(part, dict) and part.get("size") == size):
+                    sub_messages = [
+                        slim_message(msg) for _, msg in iter_messages(sub_jsonl, types={"user", "assistant"})
+                    ]
+                    found = asdict(extract_all(sub_messages, scores)) if sub_messages else {}
+                    part = {"size": size, "message_count": len(sub_messages)}
+                    part.update({k: found.get(k) or [] for k in (*_KINDS, "session_files")})
+                    del sub_messages
+                parts[sub_jsonl.name] = part
+                message_count += int(part.get("message_count") or 0)
+                _merge_part(extractions, part)
 
-        if not messages:
+        if not message_count:
             # Mark genuinely empty sessions so we don't re-parse their JSONL every run
             extraction_file.write_text(
                 json.dumps(
@@ -1011,7 +1116,6 @@ def run_extraction_pipeline(
             )
             continue
 
-        extractions = extract_all(messages)
         extractions.session_id = session_id
 
         count = (
@@ -1023,8 +1127,11 @@ def run_extraction_pipeline(
 
         extraction_data = asdict(extractions)
         extraction_data["scorer_available"] = scorer_available
-        extraction_data["message_count"] = len(messages)
+        extraction_data["message_count"] = message_count
         extraction_data["main_message_count"] = main_message_count
+        extraction_data["subagents"] = parts
+        current = _score_sets()
+        extraction_data["scores"] = {k: v for k, v in scores.items() if k in current}
 
         # Always write — even if count is 0. The scorer_available flag
         # lets us know whether to retry when scorer comes back.
@@ -1046,6 +1153,40 @@ def run_extraction_pipeline(
             _feed_to_memory_store(project_path, fresh, windvane_storage_dir)
 
     return total_extractions
+
+
+_KINDS = ("decisions", "mistakes", "approaches", "corrections")
+_KIND_CLASS = {"decisions": Decision, "mistakes": Mistake, "approaches": Approach, "corrections": Correction}
+
+
+def _merge_part(extractions: SessionExtractions, part: dict) -> None:
+    """Add one subagent transcript's extractions (stored as dicts) to the
+    session's, skipping what the session already holds (by kind, text and
+    message timestamp); its edited files join the session's after the
+    main thread's."""
+    from dataclasses import fields
+
+    for kind in _KINDS:
+        target = getattr(extractions, kind)
+        seen = {_extraction_key(kind, item) for item in target}
+        cls = _KIND_CLASS[kind]
+        names = {f.name for f in fields(cls)}
+        for item in part.get(kind) or []:
+            if not isinstance(item, dict):
+                continue
+            key = _extraction_key(kind, item)
+            if key in seen:
+                continue
+            try:
+                target.append(cls(**{k: v for k, v in item.items() if k in names}))
+            except TypeError:
+                continue
+            seen.add(key)
+    have = set(extractions.session_files)
+    for f in part.get("session_files") or []:
+        if f and f not in have:
+            have.add(f)
+            extractions.session_files.append(f)
 
 
 def _extraction_key(kind: str, item) -> tuple:
