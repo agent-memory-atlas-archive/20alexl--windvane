@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.19 (2026-10-18)
+
+- **Mining a grown session again is cheap.** The session-end run re-mined every grown session from scratch: it read every subagent transcript again (on a long session with 483 of them, 6.1 GB, holding every message at once) and embedded every candidate sentence again, the decision pass twice. Each subagent transcript is now extracted on its own and kept, with its size, in the session's extraction file; one whose size has not changed is not read again. A sentence's scores are kept there too, so only new text is embedded, and a text is embedded once per run however many template sets score it. On that session a re-mine after new turns went from 72 s, 3,042 texts embedded and a 904 MB peak to 5 s, 2 texts and 203 MB. The first mine of a session is a little slower (313 s against 286 s there, most of it storing the entries), and its extraction file is about twice the size.
+- **Large scoring batches use the GPU.** A scoring batch of 512 texts or more goes to the short-lived GPU worker the memory index already uses, and to the daemon when there is no GPU.
+- **Struggles are counted per agent.** A file edited three times with an error in between was counted across the main thread and every subagent together, so edits by different agents made one "struggle". Each subagent transcript is now read separately.
+
 ## 1.0.18 (2026-10-12)
 
 - **windvane-keeper: windvane comes back by itself.** Claude Code runs every plugin's hooks module in one worker, and when that worker misses its five-second heartbeat it unloads the plugin whose hook was running, tools and all, until someone types `/reload-plugins`. windvane hooks nearly every event, so on a busy machine it is the one caught; a session with ten agents ran on to 85% of its compaction point with no `compact_now`. The new optional plugin `windvane-keeper` (install it from the same marketplace) watches the marker windvane's mod rewrites every ten seconds and, when it goes quiet while windvane is enabled, changes windvane's hidden `revision` option, which reloads it. Tested against a plugin deliberately unloaded this way: the option change brought it and its tools back. At most three reloads in ten minutes.
